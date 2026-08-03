@@ -3,7 +3,7 @@ slug: run-hazelcast-community-edition
 id: b5ga5phbxaih
 type: challenge
 title: Run Hazelcast Community Edition — No License Required
-teaser: Start a real Hazelcast cluster with nothing but a JVM and a plain JAR — no
+teaser: Start a Hazelcast cluster with nothing but a JVM and a plain JAR — no
   license, no sign-up.
 notes:
 - type: text
