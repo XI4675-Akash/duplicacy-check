@@ -1,0 +1,39 @@
+#!/bin/bash
+set -euxo pipefail
+
+# Idempotent by construction, mirroring Challenge 3's solve script: SINK INTO (not the
+# taught INSERT INTO) is used for the new CAD row too, so this script is safe to rerun
+# even if the learner already ran the literal INSERT INTO themselves (which would
+# otherwise error on a second run under set -e). The learner is never shown SINK INTO
+# for the CAD row -- Step 2 teaches INSERT INTO deliberately, since that row is new and
+# INSERT is the correct real-world tool for a genuinely new key; SINK INTO's use here is
+# purely so Solve is safely re-runnable, exactly the same undisclosed divergence pattern
+# Challenge 3's solve script used.
+#
+# `map remove` on an already-absent key is guarded with `|| true` since removing a key
+# that isn't there should be a no-op outcome either way, not a script-aborting error.
+
+clc config add dev cluster.name=dev cluster.address=localhost:5701 >/dev/null
+
+clc -c dev sql "SINK INTO currency VALUES (6,'CAD','Canadian Dollar');" >/dev/null
+clc -c dev sql "SINK INTO currency VALUES (5,'INR','Indian Rupee (updated)');" >/dev/null
+
+clc -c dev map remove --name greeting fr >/dev/null 2>&1 || true
+clc -c dev map set --name greeting es Hola >/dev/null
+
+# Bounded confirmation of the exact state check-workstation validates.
+for i in $(seq 1 15); do
+  OUT="$(clc -c dev sql -f csv "SELECT code, name FROM currency;" 2>/dev/null)"
+  if echo "$OUT" | grep -qi "USD" && echo "$OUT" | grep -qi "EUR" \
+     && echo "$OUT" | grep -qi "GBP" && echo "$OUT" | grep -qi "JPY" \
+     && echo "$OUT" | grep -qi "CAD" && echo "$OUT" | grep -qi "Indian Rupee (updated)" \
+     && clc -c dev map get --name greeting en 2>/dev/null | grep -qi "Hello" \
+     && ! clc -c dev map get --name greeting fr 2>/dev/null | grep -qi "Bonjour" \
+     && clc -c dev map get --name greeting es 2>/dev/null | grep -qi "Hola"; then
+    exit 0
+  fi
+  sleep 1
+done
+
+echo "ERROR: solve script ran but check-workstation's conditions were not met within 15s" >&2
+exit 1

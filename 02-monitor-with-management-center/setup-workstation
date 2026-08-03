@@ -1,0 +1,46 @@
+#!/bin/bash
+set -euxo pipefail
+
+# --- Defensive precondition carried forward from Challenge 1 (committed contract) ---
+# Instruqt does not guarantee nohup processes survive challenge boundaries; restart
+# only if actually not running, and only clear the log inside this branch.
+if ! pgrep -f "hazelcast-5.7.0.jar" >/dev/null 2>&1; then
+  rm -f ~/hazelcast/hazelcast.log
+  nohup java -Dhz.jet.enabled=true -cp "$HOME/hazelcast/hazelcast-5.7.0.jar:$HOME/hazelcast/hazelcast-sql-5.7.0.jar" com.hazelcast.core.server.HazelcastMemberStarter > ~/hazelcast/hazelcast.log 2>&1 &
+  disown
+  for i in $(seq 1 30); do
+    grep -q "Members {size:1" ~/hazelcast/hazelcast.log 2>/dev/null \
+      && ss -tln 2>/dev/null | grep -q ':5701' && break
+    sleep 1
+  done
+fi
+
+# --- This challenge's own setup: clean slate for Management Center ---
+# Remove any stale MC container from a previous/hot-started attempt (defensive, idempotent).
+STALE_CIDS="$(docker ps -aq --filter ancestor=hazelcast/management-center:5.11.0 2>/dev/null || true)"
+if [ -n "$STALE_CIDS" ]; then
+  docker rm -f $STALE_CIDS >/dev/null 2>&1 || true
+fi
+
+# Bounded poll for port 8080 to actually release (mirrors Challenge 1's port-free wait pattern).
+for i in $(seq 1 15); do
+  ss -tln 2>/dev/null | grep -q ':8080' || break
+  sleep 1
+done
+
+# --- Verification tail: assert every capability this challenge depends on ---
+verify() {
+  local desc="$1"; shift
+  if ! "$@" >/dev/null 2>&1; then
+    echo "SETUP VERIFICATION FAILED: ${desc}" >&2
+    echo "  command: $*" >&2
+    exit 1
+  fi
+}
+
+verify "Hazelcast member alive: cluster dev, 1 member, port 5701" \
+  bash -c 'pgrep -f "hazelcast-5.7.0.jar" >/dev/null && grep -q "Members {size:1" ~/hazelcast/hazelcast.log && ss -tln | grep -q ":5701"'
+verify "Docker daemon operational"                              docker info
+verify "Management Center 5.11.0 image pre-pulled"              docker image inspect hazelcast/management-center:5.11.0
+verify "Port 8080 free at challenge start"                       bash -c '! ss -tln 2>/dev/null | grep -q ":8080"'
+verify "No stale Management Center container running"           bash -c '[ -z "$(docker ps -q --filter ancestor=hazelcast/management-center:5.11.0)" ]'

@@ -1,0 +1,17 @@
+#!/bin/bash
+set -euxo pipefail
+
+# --- Track-level cleanup: runs once when the lab session ends ---
+# Tears down everything the track brought onto the workstation:
+#   1. The Hazelcast Community Edition member (backgrounded via nohup in Challenge 1)
+#   2. The Management Center container (started detached in Challenge 2)
+#   3. Downloaded artifacts and generated state (JARs, log, CLC config)
+# Best-effort only -- the learner's session is already over by the time this
+# runs, so nothing here is verified.
+
+pkill -f "hazelcast-5.7.0.jar" 2>/dev/null || true
+
+docker rm -f "$(docker ps -aq --filter ancestor=hazelcast/management-center:5.11.0 2>/dev/null)" >/dev/null 2>&1 || true
+
+rm -rf "${HOME}/hazelcast"
+rm -rf "${HOME}/.hazelcast"

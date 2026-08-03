@@ -1,0 +1,31 @@
+#!/bin/bash
+set -euxo pipefail
+
+# Defensive: guarantee a clean slate even on a hot-started or re-run sandbox --
+# clear any stale member from a previous attempt before the learner starts theirs.
+pkill -f "hazelcast-5.7.0.jar" 2>/dev/null || true
+
+# Bounded poll (not a blind sleep) for the port to actually release.
+for i in $(seq 1 15); do
+  ss -tln 2>/dev/null | grep -q ':5701' || break
+  sleep 1
+done
+
+mkdir -p ~/hazelcast
+rm -f ~/hazelcast/hazelcast.log
+
+# --- Verification tail: assert every capability this challenge depends on ---
+verify() {
+  local desc="$1"; shift
+  if ! "$@" >/dev/null 2>&1; then
+    echo "SETUP VERIFICATION FAILED: ${desc}" >&2
+    echo "  command: $*" >&2
+    exit 1
+  fi
+}
+
+verify "Java 17 resolves via 'java' on PATH"          bash -c 'java -version 2>&1 | grep -q "\"17"'
+verify "Hazelcast 5.7.0 JAR present"                   test -f ~/hazelcast/hazelcast-5.7.0.jar
+verify "Hazelcast SQL 5.7.0 JAR present"               test -f ~/hazelcast/hazelcast-sql-5.7.0.jar
+verify "~/hazelcast is writable for log redirection"   test -w ~/hazelcast
+verify "port 5701 is free at challenge start"          bash -c '! ss -tln 2>/dev/null | grep -q ":5701"'

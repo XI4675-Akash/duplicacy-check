@@ -1,0 +1,21 @@
+#!/bin/bash
+set -euxo pipefail
+
+# Idempotent: only start the member if it is not already running
+# (e.g. the learner started it manually before clicking Solve).
+if ! pgrep -f "hazelcast-5.7.0.jar" >/dev/null 2>&1; then
+  nohup java -Dhz.jet.enabled=true -cp "$HOME/hazelcast/hazelcast-5.7.0.jar:$HOME/hazelcast/hazelcast-sql-5.7.0.jar" com.hazelcast.core.server.HazelcastMemberStarter > ~/hazelcast/hazelcast.log 2>&1 &
+  disown
+fi
+
+# Bounded poll for the exact state check-workstation validates (checks 3-5).
+for i in $(seq 1 30); do
+  if grep -q "Members {size:1" ~/hazelcast/hazelcast.log 2>/dev/null \
+     && ss -tln 2>/dev/null | grep -q ':5701'; then
+    exit 0
+  fi
+  sleep 1
+done
+
+echo "ERROR: Hazelcast member did not reach 'Members {size:1...}' / port 5701 within 30s" >&2
+exit 1

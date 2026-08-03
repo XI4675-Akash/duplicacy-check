@@ -1,0 +1,44 @@
+#!/bin/bash
+
+TOTAL_CHECKS=5
+
+# Check 1: the "dev" CLC config exists and actually connects to the live cluster
+# (a bad cluster.name or cluster.address would make this fail, not just "config missing")
+if ! clc -c dev sql "SELECT 1;" >/dev/null 2>&1; then
+  fail-message "[Check 1/${TOTAL_CHECKS}] 'clc -c dev sql \"SELECT 1;\"' failed -- no working 'dev' CLC connection was found. Run: clc config add dev cluster.name=dev cluster.address=localhost:5701"
+  exit 1
+fi
+
+CURRENCY_OUT="$(clc -c dev sql -f csv "SELECT code, name FROM currency;" 2>/dev/null)"
+CURRENCY_COUNT="$(echo "$CURRENCY_OUT" | grep -c . || true)"
+
+# Check 2: the currency mapping exists and is queryable at all
+if [ -z "$CURRENCY_OUT" ]; then
+  fail-message "[Check 2/${TOTAL_CHECKS}] The 'currency' map isn't queryable yet (no mapping, or no rows). Run the CREATE OR REPLACE MAPPING and INSERT INTO commands from this challenge's SQL section."
+  exit 1
+fi
+
+# Check 3: all five taught rows are present (not just one), matching the assignment's own
+# completion marker ("shows your five currencies") -- a single spot-checked row would let
+# a partial/incomplete INSERT pass.
+if [ "$CURRENCY_COUNT" -lt 5 ] || ! echo "$CURRENCY_OUT" | grep -qi "USD" \
+   || ! echo "$CURRENCY_OUT" | grep -qi "EUR" || ! echo "$CURRENCY_OUT" | grep -qi "GBP" \
+   || ! echo "$CURRENCY_OUT" | grep -qi "JPY" || ! echo "$CURRENCY_OUT" | grep -qi "INR"; then
+  fail-message "[Check 3/${TOTAL_CHECKS}] The 'currency' map doesn't contain all five rows yet (found ${CURRENCY_COUNT}/5). Re-run the INSERT INTO statement shown in this challenge -- it inserts all five currencies in one statement."
+  exit 1
+fi
+
+# Check 4: greeting map holds the expected 'en' -> 'Hello' entry
+if ! clc -c dev map get --name greeting en 2>/dev/null | grep -qi "Hello"; then
+  fail-message "[Check 4/${TOTAL_CHECKS}] 'clc -c dev map get --name greeting en' didn't return 'Hello'. Run: clc -c dev map set --name greeting en Hello"
+  exit 1
+fi
+
+# Check 5: greeting map holds the expected 'fr' -> 'Bonjour' entry
+if ! clc -c dev map get --name greeting fr 2>/dev/null | grep -qi "Bonjour"; then
+  fail-message "[Check 5/${TOTAL_CHECKS}] 'clc -c dev map get --name greeting fr' didn't return 'Bonjour'. Run: clc -c dev map set --name greeting fr Bonjour"
+  exit 1
+fi
+
+set-status "CLC is connected to cluster 'dev'; the 'currency' table holds all five rows and 'greeting' has both keys -- no license key, no sign-up. Nicely done."
+exit 0

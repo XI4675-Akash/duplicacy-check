@@ -1,0 +1,45 @@
+#!/bin/bash
+
+TOTAL_CHECKS=6
+
+CID="$(docker ps -q --filter ancestor=hazelcast/management-center:5.11.0 --filter status=running | head -n1)"
+
+# Check 1: a Management Center container is running
+if [ -z "$CID" ]; then
+  fail-message "[Check 1/${TOTAL_CHECKS}] No running container from hazelcast/management-center:5.11.0 was found. Run the command from Step 4: docker run -d --network host --env MC_DEFAULT_CLUSTER=dev --env MC_DEFAULT_CLUSTER_MEMBERS=localhost:5701 hazelcast/management-center:5.11.0"
+  exit 1
+fi
+
+# Check 2: it is using host networking
+NETMODE="$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$CID" 2>/dev/null)"
+if [ "$NETMODE" != "host" ]; then
+  fail-message "[Check 2/${TOTAL_CHECKS}] The Management Center container is running but not on host networking (found: '${NETMODE}'). Without --network host it cannot reach localhost:5701 on the VM. Remove it (docker rm -f ${CID}) and rerun the Step 4 command with --network host."
+  exit 1
+fi
+
+# Check 3: MC_DEFAULT_CLUSTER=dev is set
+if ! docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$CID" 2>/dev/null | grep -qx 'MC_DEFAULT_CLUSTER=dev'; then
+  fail-message "[Check 3/${TOTAL_CHECKS}] The container is missing --env MC_DEFAULT_CLUSTER=dev (or it's set to something else). Recreate it with the exact env flags from Step 4."
+  exit 1
+fi
+
+# Check 4: MC_DEFAULT_CLUSTER_MEMBERS=localhost:5701 is set
+if ! docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$CID" 2>/dev/null | grep -qx 'MC_DEFAULT_CLUSTER_MEMBERS=localhost:5701'; then
+  fail-message "[Check 4/${TOTAL_CHECKS}] The container is missing --env MC_DEFAULT_CLUSTER_MEMBERS=localhost:5701 (or it points elsewhere). This is what tells Management Center where the Challenge 1 Hazelcast member lives."
+  exit 1
+fi
+
+# Check 5: Management Center's own log confirms it reached the cluster
+if ! docker logs "$CID" 2>&1 | grep -qi "connected to cluster dev"; then
+  fail-message "[Check 5/${TOTAL_CHECKS}] Management Center's logs don't show it connected to cluster 'dev' yet. It can take up to 30 seconds after the container starts — wait a moment and click Check again. If this persists, confirm the Challenge 1 member is still running: pgrep -fa hazelcast-5.7.0.jar"
+  exit 1
+fi
+
+# Check 6: the web dashboard is actually serving on 8080
+if ! curl -sf -o /dev/null -m 5 http://localhost:8080/; then
+  fail-message "[Check 6/${TOTAL_CHECKS}] Management Center's web dashboard isn't responding on port 8080 yet. Give it a few more seconds to finish starting, then click Check again."
+  exit 1
+fi
+
+set-status "Management Center is connected to cluster 'dev' and serving its dashboard on 8080 -- no license key, no sign-up. Nicely done."
+exit 0

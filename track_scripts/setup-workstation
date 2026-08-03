@@ -1,0 +1,112 @@
+#!/bin/bash
+set -euxo pipefail
+
+# --- Track-level setup: runs once when the sandbox is provisioned. ---
+# Installs the four capabilities every challenge in this track depends on:
+#   1. OpenJDK 17+ (to run the Hazelcast Community Edition JAR directly)
+#   2. The Hazelcast Community Edition 5.7.0 JAR (pre-downloaded, not started here)
+#   3. The Hazelcast Management Center 5.11.0 Docker image (pre-pulled, not run here)
+#   4. CLC v5.3.3, pinned to the last Apache 2.0 source-available release, on PATH
+# None of these are started/used here -- each challenge's own setup/assignment does that.
+
+until [ -f /opt/instruqt/bootstrap/host-bootstrap-completed ]; do
+  sleep 1
+done
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq openjdk-17-jre-headless jq unzip ca-certificates curl
+
+# --- 1. Docker daemon readiness ---
+# instruqt/docker-28-3 ships Docker CE pre-installed, but the daemon may still be
+# starting up when this script begins. Bounded poll, not a blind sleep.
+DOCKER_READY=0
+for i in $(seq 1 30); do
+  if docker info >/dev/null 2>&1; then
+    DOCKER_READY=1
+    break
+  fi
+  sleep 2
+done
+if [ "${DOCKER_READY}" -ne 1 ]; then
+  echo "SETUP FAILED: Docker daemon did not become ready within 60s" >&2
+  exit 1
+fi
+
+# --- 2. Hazelcast Community Edition 5.7.0 JAR(s) ---
+# Official Maven Central coordinates. The core "hazelcast" artifact alone does NOT
+# include the SQL engine when run in embedded/plain-JAR mode (java -jar) -- SQL support
+# (CREATE MAPPING / INSERT INTO / SELECT / SINK INTO, used in Challenges 3-4) lives in a
+# separate "hazelcast-sql" artifact that must be added to the classpath explicitly.
+# See: https://docs.hazelcast.com/hazelcast/5.7/sql/sql-overview (embedded-mode classpath note).
+HAZELCAST_VERSION="5.7.0"
+mkdir -p ~/hazelcast
+curl -fsSL -o ~/hazelcast/hazelcast-${HAZELCAST_VERSION}.jar \
+  "https://repo1.maven.org/maven2/com/hazelcast/hazelcast/${HAZELCAST_VERSION}/hazelcast-${HAZELCAST_VERSION}.jar"
+curl -fsSL -o ~/hazelcast/hazelcast-sql-${HAZELCAST_VERSION}.jar \
+  "https://repo1.maven.org/maven2/com/hazelcast/hazelcast-sql/${HAZELCAST_VERSION}/hazelcast-sql-${HAZELCAST_VERSION}.jar"
+
+# --- 3. Pre-pull the Hazelcast Management Center image ---
+docker pull hazelcast/management-center:5.11.0
+
+# --- 4. Install CLC, pinned to v5.3.3 (last Apache 2.0 source-available release) ---
+# Deliberately NOT using the generic hazelcast.com/clc/install.sh script, which always
+# fetches the latest release and would silently pull a binary-only build past v5.3.3.
+# Instead, fetch the exact linux/amd64 asset from the v5.3.3 GitHub release tag directly.
+CLC_VERSION="v5.3.3"
+CLC_REPO="hazelcast/hazelcast-commandline-client"
+CLC_WORKDIR="$(mktemp -d)"
+
+CLC_ASSET_URL="$(curl -fsSL "https://api.github.com/repos/${CLC_REPO}/releases/tags/${CLC_VERSION}" \
+  | jq -r '.assets[].browser_download_url' \
+  | grep -iE 'linux' \
+  | grep -iE 'amd64|x86_64' \
+  | grep -viE 'checksum|sbom|\.sig$' \
+  | head -n1)"
+
+if [ -z "${CLC_ASSET_URL}" ]; then
+  echo "SETUP FAILED: no linux/amd64 CLC ${CLC_VERSION} release asset found for ${CLC_REPO}" >&2
+  exit 1
+fi
+
+CLC_ASSET_FILE="${CLC_WORKDIR}/$(basename "${CLC_ASSET_URL}")"
+curl -fsSL -o "${CLC_ASSET_FILE}" "${CLC_ASSET_URL}"
+
+case "${CLC_ASSET_FILE}" in
+  *.tar.gz|*.tgz)
+    tar -xzf "${CLC_ASSET_FILE}" -C "${CLC_WORKDIR}"
+    ;;
+  *.zip)
+    unzip -q "${CLC_ASSET_FILE}" -d "${CLC_WORKDIR}"
+    ;;
+  *)
+    echo "SETUP FAILED: unrecognized CLC archive format: ${CLC_ASSET_FILE}" >&2
+    exit 1
+    ;;
+esac
+
+CLC_BIN="$(find "${CLC_WORKDIR}" -type f -name 'clc' | head -n1)"
+if [ -z "${CLC_BIN}" ]; then
+  echo "SETUP FAILED: no 'clc' binary found inside the downloaded v5.3.3 release archive" >&2
+  exit 1
+fi
+
+install -m 0755 "${CLC_BIN}" /usr/local/bin/clc
+rm -rf "${CLC_WORKDIR}"
+
+# --- Verification tail: assert every track-level capability is actually functional ---
+verify() {
+  local desc="$1"; shift
+  if ! "$@" >/dev/null 2>&1; then
+    echo "SETUP VERIFICATION FAILED: ${desc}" >&2
+    echo "  command: $*" >&2
+    exit 1
+  fi
+}
+
+verify "Docker daemon operational"                      docker info
+verify "OpenJDK 17+ resolves via 'java' on PATH"         bash -c 'java -version 2>&1 | grep -q "\"17"'
+verify "Hazelcast ${HAZELCAST_VERSION} JAR downloaded"   test -f ~/hazelcast/hazelcast-${HAZELCAST_VERSION}.jar
+verify "Hazelcast SQL ${HAZELCAST_VERSION} JAR downloaded" test -f ~/hazelcast/hazelcast-sql-${HAZELCAST_VERSION}.jar
+verify "Management Center 5.11.0 image pre-pulled"       docker image inspect hazelcast/management-center:5.11.0
+verify "CLC v5.3.3 resolves via 'clc' on PATH"           bash -c 'clc version | grep -q 5.3.3'

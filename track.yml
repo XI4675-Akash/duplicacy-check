@@ -1,0 +1,42 @@
+slug: hazelcast-community-edition-deploy-monitor-query-for-free
+id: 6alajrmlsqoe
+title: Hazelcast Community Edition — Deploy, Monitor & Query for Free
+teaser: Stand up a real in-memory data grid, watch it live, and query it from the
+  CLI — zero license, zero cost.
+description: |-
+  Hazelcast Community Edition, Management Center's free tier, and the open-source CLC client together prove a complete, hands-on in-memory data grid experience is possible with zero license key, zero sign-up, and zero cost.
+
+  In this track you will:
+  - Deploy a Hazelcast Community Edition member from the plain JAR distribution, with no configuration and no license key
+  - Connect the official Management Center dashboard to your running cluster and watch it live, confirming the free tier needs no license for clusters of up to 3 members
+  - Install a version-pinned, source-available build of CLC and use it to run SQL statements and direct map operations against the live cluster
+  - Confirm that changes made from the command line show up in Management Center in real time
+
+  **Prerequisites:** comfortable navigating a Linux terminal, has run `docker run` before, and can read/write basic SQL (`SELECT`, `INSERT`, `WHERE`). No prior Hazelcast experience required — cluster/member terminology, Management Center, and CLC are all taught from scratch.
+icon: .\assets\Hazelcast.png
+level: beginner
+tags:
+- persona:architect
+- persona:developer
+- hc-product:hazelcast
+owner: instruqt-support
+developers:
+- akash@instruqt.com
+show_timer: true
+skipping_enabled: true
+idle_timeout: 1800
+timelimit: 5400
+lab_config:
+  extend_ttl: 300
+  sidebar_enabled: true
+  feedback_recap_enabled: true
+  feedback_tab_enabled: false
+  loadingMessages: false
+  theme:
+    name: original
+  override_challenge_layout: false
+  hideStopButton: false
+  default_layout: AssignmentRight
+  default_layout_sidebar_size: 33
+checksum: "15366943995529120690"
+enhanced_loading: false

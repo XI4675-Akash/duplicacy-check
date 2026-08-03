@@ -1,0 +1,13 @@
+version: "3"
+virtualmachines:
+- name: workstation
+  # Single VM for the whole track: runs the Hazelcast member as a native JVM process
+  # (Challenge 1) alongside the Management Center container (Challenge 2+).
+  machine_type: n1-standard-2 # one JVM member + one MC container; no heavy workload
+  image: instruqt/docker-28-3 # Docker CE pre-installed -- avoids slow install/DNS setup
+  nested_virtualization: true # required for the Docker daemon to start
+  allow_external_ingress:
+  - http
+  - https
+  - high-ports # required for the Management Center service tab (port 8080) in Challenge 2+
+  provision_ssl_certificate: true # avoids certificate warnings on the service tab

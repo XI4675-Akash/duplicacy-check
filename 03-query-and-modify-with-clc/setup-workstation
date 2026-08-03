@@ -1,0 +1,77 @@
+#!/bin/bash
+set -euxo pipefail
+
+# --- Defensive precondition carried forward from Challenge 1 (committed contract) ---
+if ! pgrep -f "hazelcast-5.7.0.jar" >/dev/null 2>&1; then
+  rm -f ~/hazelcast/hazelcast.log
+  nohup java -Dhz.jet.enabled=true -cp "$HOME/hazelcast/hazelcast-5.7.0.jar:$HOME/hazelcast/hazelcast-sql-5.7.0.jar" com.hazelcast.core.server.HazelcastMemberStarter > ~/hazelcast/hazelcast.log 2>&1 &
+  disown
+  for i in $(seq 1 30); do
+    grep -q "Members {size:1" ~/hazelcast/hazelcast.log 2>/dev/null \
+      && ss -tln 2>/dev/null | grep -q ':5701' && break
+    sleep 1
+  done
+fi
+
+# --- Defensive precondition adapted from Challenge 2's solve-script pattern (Ch2 itself
+# never needed a "restart if not running" block in its own setup, since starting MC is
+# Ch2's own graded action) -- Management Center must still be up here because Challenge 4
+# depends on it. This challenge never recreates or otherwise touches the container if it
+# is already running -- restart only if it's not.
+if [ -z "$(docker ps -q --filter ancestor=hazelcast/management-center:5.11.0 --filter status=running)" ]; then
+  docker rm -f $(docker ps -aq --filter ancestor=hazelcast/management-center:5.11.0 2>/dev/null) >/dev/null 2>&1 || true
+  docker run -d --network host \
+    --env MC_DEFAULT_CLUSTER=dev \
+    --env MC_DEFAULT_CLUSTER_MEMBERS=localhost:5701 \
+    hazelcast/management-center:5.11.0
+  CID="$(docker ps -q --filter ancestor=hazelcast/management-center:5.11.0 --filter status=running | head -n1)"
+  for i in $(seq 1 45); do
+    docker logs "$CID" 2>&1 | grep -qi "connected to cluster dev" \
+      && curl -sf -o /dev/null -m 2 http://localhost:8080/ && break
+    sleep 2
+  done
+fi
+
+# --- This challenge's own clean slate ---
+# 1) Remove any stale "dev" CLC config from a previous attempt (hot start / re-run), so
+#    the learner's own `clc config add dev ...` in Step 2 is the first time it exists.
+STALE_DEV_DIR="$(clc home configs dev 2>/dev/null || true)"
+[ -n "$STALE_DEV_DIR" ] && rm -rf "$STALE_DEV_DIR"
+
+# 2) Clear any stale mapping/data left in the maps this challenge writes to, using a
+#    private, throwaway CLC config -- deliberately never named "dev", so it can never
+#    satisfy Step 2's own check on its own. Hazelcast map data lives in the long-running
+#    member process, not in the terminal session, so it persists across challenge/hot-
+#    start boundaries unless explicitly cleared here.
+clc config add __ch3_setup cluster.name=dev cluster.address=localhost:5701 >/dev/null
+clc -c __ch3_setup sql "DROP MAPPING IF EXISTS currency;" >/dev/null 2>&1 || true
+clc -c __ch3_setup map clear --name currency >/dev/null
+clc -c __ch3_setup map clear --name greeting >/dev/null
+CURRENCY_SIZE="$(clc -c __ch3_setup map size --name currency 2>/dev/null | tr -dc '0-9')"
+GREETING_SIZE="$(clc -c __ch3_setup map size --name greeting 2>/dev/null | tr -dc '0-9')"
+
+# --- Verification tail: assert every capability this challenge depends on ---
+verify() {
+  local desc="$1"; shift
+  if ! "$@" >/dev/null 2>&1; then
+    echo "SETUP VERIFICATION FAILED: ${desc}" >&2
+    echo "  command: $*" >&2
+    exit 1
+  fi
+}
+
+verify "Hazelcast member alive: cluster dev, 1 member, port 5701" \
+  bash -c 'pgrep -f "hazelcast-5.7.0.jar" >/dev/null && grep -q "Members {size:1" ~/hazelcast/hazelcast.log && ss -tln | grep -q ":5701"'
+verify "Management Center still running, connected to cluster dev, serving on 8080" \
+  bash -c 'CID=$(docker ps -q --filter ancestor=hazelcast/management-center:5.11.0 --filter status=running | head -n1); [ -n "$CID" ] && docker logs "$CID" 2>&1 | grep -qi "connected to cluster dev" && curl -sf -o /dev/null -m 5 http://localhost:8080/'
+verify "CLC v5.3.3 resolves via 'clc' on PATH"        bash -c 'clc version | grep -q 5.3.3'
+verify "\$HOME is writable for CLC's config store"    test -w "$HOME"
+verify "No leftover 'dev' CLC config from a previous attempt"      bash -c '[ ! -d "$(clc home configs dev)" ]'
+verify "currency map is actually empty after clearing (not just that clear succeeded)" \
+  bash -c '[ "'"$CURRENCY_SIZE"'" = "0" ]'
+verify "greeting map is actually empty after clearing (not just that clear succeeded)" \
+  bash -c '[ "'"$GREETING_SIZE"'" = "0" ]'
+
+# Remove the private helper config now that verification is done -- it must never be
+# left behind under a name that could be mistaken for the learner's own "dev" config.
+rm -rf "$(clc home configs __ch3_setup 2>/dev/null)" 2>/dev/null || true

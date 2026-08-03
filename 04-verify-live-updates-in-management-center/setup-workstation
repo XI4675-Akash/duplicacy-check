@@ -1,0 +1,83 @@
+#!/bin/bash
+set -euxo pipefail
+
+# --- Defensive precondition carried forward from Challenge 1 (committed contract) ---
+if ! pgrep -f "hazelcast-5.7.0.jar" >/dev/null 2>&1; then
+  rm -f ~/hazelcast/hazelcast.log
+  nohup java -Dhz.jet.enabled=true -cp "$HOME/hazelcast/hazelcast-5.7.0.jar:$HOME/hazelcast/hazelcast-sql-5.7.0.jar" com.hazelcast.core.server.HazelcastMemberStarter > ~/hazelcast/hazelcast.log 2>&1 &
+  disown
+  for i in $(seq 1 30); do
+    grep -q "Members {size:1" ~/hazelcast/hazelcast.log 2>/dev/null \
+      && ss -tln 2>/dev/null | grep -q ':5701' && break
+    sleep 1
+  done
+fi
+
+# --- Defensive precondition carried forward from Challenge 2/3 (adapted contract) ---
+if [ -z "$(docker ps -q --filter ancestor=hazelcast/management-center:5.11.0 --filter status=running)" ]; then
+  docker rm -f $(docker ps -aq --filter ancestor=hazelcast/management-center:5.11.0 2>/dev/null) >/dev/null 2>&1 || true
+  docker run -d --network host \
+    --env MC_DEFAULT_CLUSTER=dev \
+    --env MC_DEFAULT_CLUSTER_MEMBERS=localhost:5701 \
+    hazelcast/management-center:5.11.0
+  CID="$(docker ps -q --filter ancestor=hazelcast/management-center:5.11.0 --filter status=running | head -n1)"
+  for i in $(seq 1 45); do
+    docker logs "$CID" 2>&1 | grep -qi "connected to cluster dev" \
+      && curl -sf -o /dev/null -m 2 http://localhost:8080/ && break
+    sleep 2
+  done
+fi
+
+# --- This challenge's own baseline restore ---
+# Decision, made explicit rather than assumed (see plan.md "Explicit decision on data
+# persistence"): IMap data lives only in the member's memory, so if the block above ever
+# actually had to restart the member, Challenge 3's data is gone regardless of whether
+# CLC's on-disk "dev" config survived. Rather than detect "did we just restart it" and
+# branch, unconditionally re-establish the exact Challenge 3 baseline via idempotent
+# commands, using a private, throwaway CLC config so this never depends on "dev" already
+# existing. Safe whether Ch3's data fully survived, partially survived, or was wiped
+# outright -- and it also resets any stray partial-attempt state from a previous run of
+# *this* challenge (e.g. a leftover CAD row or "es" key) back to the correct start point.
+clc config add __ch4_setup cluster.name=dev cluster.address=localhost:5701 >/dev/null
+
+clc -c __ch4_setup map clear --name currency >/dev/null
+clc -c __ch4_setup map clear --name greeting >/dev/null
+
+clc -c __ch4_setup sql "CREATE OR REPLACE MAPPING currency (__key INT, code VARCHAR, name VARCHAR) TYPE IMap OPTIONS ('keyFormat'='int','valueFormat'='json-flat');" >/dev/null
+clc -c __ch4_setup sql "SINK INTO currency VALUES (1,'USD','US Dollar'),(2,'EUR','Euro'),(3,'GBP','British Pound'),(4,'JPY','Japanese Yen'),(5,'INR','Indian Rupee');" >/dev/null
+
+clc -c __ch4_setup map set --name greeting en Hello >/dev/null
+clc -c __ch4_setup map set --name greeting fr Bonjour >/dev/null
+
+CURRENCY_SIZE="$(clc -c __ch4_setup map size --name currency 2>/dev/null | tr -dc '0-9')"
+GREETING_SIZE="$(clc -c __ch4_setup map size --name greeting 2>/dev/null | tr -dc '0-9')"
+
+# Ensure the learner's own named connection exists too -- idempotent (config add
+# overwrites by name), safe to always run regardless of whether Ch3's on-disk config
+# survived.
+clc config add dev cluster.name=dev cluster.address=localhost:5701 >/dev/null
+
+# --- Verification tail: assert every capability this challenge depends on ---
+verify() {
+  local desc="$1"; shift
+  if ! "$@" >/dev/null 2>&1; then
+    echo "SETUP VERIFICATION FAILED: ${desc}" >&2
+    echo "  command: $*" >&2
+    exit 1
+  fi
+}
+
+verify "Hazelcast member alive: cluster dev, 1 member, port 5701" \
+  bash -c 'pgrep -f "hazelcast-5.7.0.jar" >/dev/null && grep -q "Members {size:1" ~/hazelcast/hazelcast.log && ss -tln | grep -q ":5701"'
+verify "Management Center still running, connected to cluster dev, serving on 8080" \
+  bash -c 'CID=$(docker ps -q --filter ancestor=hazelcast/management-center:5.11.0 --filter status=running | head -n1); [ -n "$CID" ] && docker logs "$CID" 2>&1 | grep -qi "connected to cluster dev" && curl -sf -o /dev/null -m 5 http://localhost:8080/'
+verify "'dev' CLC connection resolves and reaches the live cluster" \
+  bash -c 'clc -c dev sql "SELECT 1;" >/dev/null 2>&1'
+verify "currency map restored to the exact 5-row Challenge 3 baseline" \
+  bash -c '[ "'"$CURRENCY_SIZE"'" = "5" ]'
+verify "greeting map restored to the exact 2-key (en/fr) Challenge 3 baseline" \
+  bash -c '[ "'"$GREETING_SIZE"'" = "2" ]'
+
+# Remove the private helper config now that verification is done -- it must never be
+# left behind under a name that could be mistaken for the learner's own "dev" config.
+rm -rf "$(clc home configs __ch4_setup 2>/dev/null)" 2>/dev/null || true

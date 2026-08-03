@@ -1,0 +1,41 @@
+#!/bin/bash
+set -euxo pipefail
+
+# Every command below is idempotent by construction: `config add` overwrites by name,
+# `CREATE OR REPLACE MAPPING` replaces by name, `SINK INTO` upserts by key, and `map set`
+# overwrites by key. So unlike Challenges 1-2's solve scripts (which need "if not already
+# running" guards because starting a process/container twice is unsafe), nothing here
+# needs a guard -- this script is safe to run whether the learner did nothing, some
+# steps, or all of them manually first.
+#
+# One deliberate divergence from the assignment: this script uses SINK INTO instead of
+# the taught INSERT INTO for the currency rows. INSERT INTO is append-only and would
+# throw a duplicate-key error on a second run (e.g. the learner inserted the rows
+# manually, then clicked Solve) -- SINK INTO is Hazelcast's upsert equivalent and
+# reaches the identical end state check-workstation validates. The learner is never
+# shown SINK INTO; it exists only so Solve is safely re-runnable.
+
+clc config add dev cluster.name=dev cluster.address=localhost:5701 >/dev/null
+
+clc -c dev sql "CREATE OR REPLACE MAPPING currency (__key INT, code VARCHAR, name VARCHAR) TYPE IMap OPTIONS ('keyFormat'='int','valueFormat'='json-flat');" >/dev/null
+
+clc -c dev sql "SINK INTO currency VALUES (1,'USD','US Dollar'),(2,'EUR','Euro'),(3,'GBP','British Pound'),(4,'JPY','Japanese Yen'),(5,'INR','Indian Rupee');" >/dev/null
+
+clc -c dev map set --name greeting en Hello >/dev/null
+clc -c dev map set --name greeting fr Bonjour >/dev/null
+
+# Bounded confirmation of the exact state check-workstation validates (all 5 rows, not just one).
+for i in $(seq 1 15); do
+  OUT="$(clc -c dev sql -f csv "SELECT code FROM currency;" 2>/dev/null)"
+  if clc -c dev sql "SELECT 1;" >/dev/null 2>&1 \
+     && echo "$OUT" | grep -qi USD && echo "$OUT" | grep -qi EUR \
+     && echo "$OUT" | grep -qi GBP && echo "$OUT" | grep -qi JPY && echo "$OUT" | grep -qi INR \
+     && clc -c dev map get --name greeting en 2>/dev/null | grep -qi Hello \
+     && clc -c dev map get --name greeting fr 2>/dev/null | grep -qi Bonjour; then
+    exit 0
+  fi
+  sleep 1
+done
+
+echo "ERROR: solve script ran but check-workstation's conditions were not met within 15s" >&2
+exit 1

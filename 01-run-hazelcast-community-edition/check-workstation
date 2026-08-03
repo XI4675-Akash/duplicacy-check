@@ -1,0 +1,36 @@
+#!/bin/bash
+
+TOTAL_CHECKS=5
+
+# Check 1: a Java process is running the Hazelcast JAR
+if ! pgrep -f "hazelcast-5.7.0.jar" >/dev/null 2>&1; then
+  fail-message "[Check 1/${TOTAL_CHECKS}] No running Java process for hazelcast-5.7.0.jar was found. Start the member with: nohup java -Dhz.jet.enabled=true -cp \"\$HOME/hazelcast/hazelcast-5.7.0.jar:\$HOME/hazelcast/hazelcast-sql-5.7.0.jar\" com.hazelcast.core.server.HazelcastMemberStarter > ~/hazelcast/hazelcast.log 2>&1 &"
+  exit 1
+fi
+
+# Check 2: the log shows no fatal startup error (e.g. two members fighting over port 5701)
+if grep -qiE "already in use|BindException|Exception in thread \"main\"" ~/hazelcast/hazelcast.log 2>/dev/null; then
+  fail-message "[Check 2/${TOTAL_CHECKS}] ~/hazelcast/hazelcast.log shows a startup error (often 'Address already in use'). Run: pkill -f hazelcast-5.7.0.jar, then restart the member with the nohup command from Step 3."
+  exit 1
+fi
+
+# Check 3: the log confirms the member joined the default cluster "dev"
+if ! grep -q "Cluster name: dev" ~/hazelcast/hazelcast.log 2>/dev/null; then
+  fail-message "[Check 3/${TOTAL_CHECKS}] ~/hazelcast/hazelcast.log does not show 'Cluster name: dev' yet. Give the member a few more seconds to start, then click Check again."
+  exit 1
+fi
+
+# Check 4: the log shows a single-member cluster view
+if ! grep -q "Members {size:1" ~/hazelcast/hazelcast.log 2>/dev/null; then
+  fail-message "[Check 4/${TOTAL_CHECKS}] ~/hazelcast/hazelcast.log does not show 'Members {size:1, ver:1}' yet. The member may still be starting -- wait a moment and click Check again."
+  exit 1
+fi
+
+# Check 5: the member is listening on the default port
+if ! ss -tln 2>/dev/null | grep -q ':5701'; then
+  fail-message "[Check 5/${TOTAL_CHECKS}] Nothing is listening on port 5701. Confirm the process is still running with: pgrep -fa hazelcast-5.7.0.jar"
+  exit 1
+fi
+
+set-status "Your Hazelcast Community Edition member is up: cluster 'dev', 1 member, listening on 5701 -- no license key, no sign-up. Nicely done."
+exit 0
